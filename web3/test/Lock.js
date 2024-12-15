@@ -1,126 +1,565 @@
-const {
-  time,
-  loadFixture,
-} = require("@nomicfoundation/hardhat-toolbox/network-helpers");
-const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
 const { expect } = require("chai");
+const { ethers } = require("hardhat");
 
-describe("Lock", function () {
-  // We define a fixture to reuse the same setup in every test.
-  // We use loadFixture to run this setup once, snapshot that state,
-  // and reset Hardhat Network to that snapshot in every test.
-  async function deployOneYearLockFixture() {
-    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
-    const ONE_GWEI = 1_000_000_000;
+describe("CertificateVerification", function () {
+	let contract;
+	let owner;
+	let institution1;
+	let institution2;
+	let recipient1;
+	let recipient2;
+	let invalidInstitution;
 
-    const lockedAmount = ONE_GWEI;
-    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+	// Utility function to generate message hash and signature
+	async function generateSignature(signer, recipient, certHash) {
+		const messageHash = ethers.solidityPackedKeccak256(
+			["address", "bytes32"],
+			[recipient, certHash]
+		);
+		const signature = await signer.signMessage(
+			ethers.getBytes(messageHash)
+		);
+		return signature;
+	}
 
-    // Contracts are deployed using the first signer/account by default
-    const [owner, otherAccount] = await ethers.getSigners();
+	beforeEach(async function () {
+		// Deploy contract and setup accounts
+		const CertificateVerification = await ethers.getContractFactory(
+			"CertificateVerification"
+		);
+		[
+			owner,
+			institution1,
+			institution2,
+			recipient1,
+			recipient2,
+			invalidInstitution,
+		] = await ethers.getSigners();
 
-    const Lock = await ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
+		contract = await CertificateVerification.deploy();
+	});
 
-    return { lock, unlockTime, lockedAmount, owner, otherAccount };
-  }
+	describe("Deployment", function () {
+		it("Should set the deployer as the owner", async function () {
+			expect(await contract.owner()).to.equal(owner.address);
+		});
+	});
 
-  describe("Deployment", function () {
-    it("Should set the right unlockTime", async function () {
-      const { lock, unlockTime } = await loadFixture(deployOneYearLockFixture);
+	describe("Institution Authorization", function () {
+		it("Should allow owner to authorize an institution", async function () {
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+			expect(await contract.authorizedInstitutions(institution1.address))
+				.to.be.true;
+		});
 
-      expect(await lock.unlockTime()).to.equal(unlockTime);
-    });
+		it("Should emit InstitutionAuthorized event when authorizing", async function () {
+			await expect(
+				contract
+					.connect(owner)
+					.authorizeInstitution(institution1.address)
+			)
+				.to.emit(contract, "InstitutionAuthorized")
+				.withArgs(institution1.address);
+		});
+		//made a change here as well
+		it("Should prevent non-owner from authorizing institutions", async function () {
+			await expect(
+				contract
+					.connect(institution1)
+					.authorizeInstitution(institution2.address)
+			)
+				.to.be.revertedWithCustomError(
+					contract,
+					"OwnableUnauthorizedAccount"
+				)
+				.withArgs(institution1.address); // Include the expected argument if necessary
+		});
 
-    it("Should set the right owner", async function () {
-      const { lock, owner } = await loadFixture(deployOneYearLockFixture);
+		// it("Should prevent non-owner from authorizing institutions", async function () {
+		// 	await expect(
+		// 		contract
+		// 			.connect(institution1)
+		// 			.authorizeInstitution(institution2.address)
+		// 	).to.be.revertedWithoutReason(); // Ownable's default revert
+		// });
 
-      expect(await lock.owner()).to.equal(owner.address);
-    });
+		it("Should prevent authorizing zero address", async function () {
+			await expect(
+				contract.connect(owner).authorizeInstitution(ethers.ZeroAddress)
+			).to.be.revertedWith("Invalid address");
+		});
 
-    it("Should receive and store the funds to lock", async function () {
-      const { lock, lockedAmount } = await loadFixture(
-        deployOneYearLockFixture
-      );
+		it("Should prevent re-authorizing an already authorized institution", async function () {
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+			await expect(
+				contract
+					.connect(owner)
+					.authorizeInstitution(institution1.address)
+			).to.be.revertedWith("Already authorized");
+		});
 
-      expect(await ethers.provider.getBalance(lock.target)).to.equal(
-        lockedAmount
-      );
-    });
+		it("Should allow owner to revoke an institution", async function () {
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+			await contract
+				.connect(owner)
+				.revokeInstitution(institution1.address);
+			expect(await contract.authorizedInstitutions(institution1.address))
+				.to.be.false;
+		});
 
-    it("Should fail if the unlockTime is not in the future", async function () {
-      // We don't use the fixture here because we want a different deployment
-      const latestTime = await time.latest();
-      const Lock = await ethers.getContractFactory("Lock");
-      await expect(Lock.deploy(latestTime, { value: 1 })).to.be.revertedWith(
-        "Unlock time should be in the future"
-      );
-    });
-  });
+		it("Should emit InstitutionRevoked event when revoking", async function () {
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+			await expect(
+				contract.connect(owner).revokeInstitution(institution1.address)
+			)
+				.to.emit(contract, "InstitutionRevoked")
+				.withArgs(institution1.address);
+		});
 
-  describe("Withdrawals", function () {
-    describe("Validations", function () {
-      it("Should revert with the right error if called too soon", async function () {
-        const { lock } = await loadFixture(deployOneYearLockFixture);
+		it("Should prevent revoking non-authorized institution", async function () {
+			await expect(
+				contract.connect(owner).revokeInstitution(institution1.address)
+			).to.be.revertedWith("Not authorized");
+		});
+	});
 
-        await expect(lock.withdraw()).to.be.revertedWith(
-          "You can't withdraw yet"
-        );
-      });
+	describe("Certificate Issuance", function () {
+		beforeEach(async function () {
+			// Authorize institution for testing
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+		});
 
-      it("Should revert with the right error if called from another account", async function () {
-        const { lock, unlockTime, otherAccount } = await loadFixture(
-          deployOneYearLockFixture
-        );
+		it("Should allow authorized institution to issue certificate", async function () {
+			const certHash = ethers.randomBytes(32);
+			const ipfsHash = "QmTestHash123";
 
-        // We can increase the time in Hardhat Network
-        await time.increaseTo(unlockTime);
+			// Generate signature
+			const signature = await generateSignature(
+				institution1,
+				recipient1.address,
+				certHash
+			);
 
-        // We use lock.connect() to send a transaction from another account
-        await expect(lock.connect(otherAccount).withdraw()).to.be.revertedWith(
-          "You aren't the owner"
-        );
-      });
+			// Issue certificate
+			await expect(
+				contract
+					.connect(institution1)
+					.issueCertificate(
+						recipient1.address,
+						certHash,
+						signature,
+						ipfsHash
+					)
+			).to.emit(contract, "CertificateIssued");
 
-      it("Shouldn't fail if the unlockTime has arrived and the owner calls it", async function () {
-        const { lock, unlockTime } = await loadFixture(
-          deployOneYearLockFixture
-        );
+			// Verify certificate details
+			const [isValid, storedIpfsHash] = await contract.verifyCertificate(
+				certHash,
+				recipient1.address
+			);
+			expect(isValid).to.be.true;
+			expect(storedIpfsHash).to.equal(ipfsHash);
+		});
 
-        // Transactions are sent using the first signer by default
-        await time.increaseTo(unlockTime);
+		it("Should prevent issuing certificate with invalid recipient", async function () {
+			const certHash = ethers.randomBytes(32);
+			const ipfsHash = "QmTestHash123";
+			const signature = await generateSignature(
+				institution1,
+				ethers.ZeroAddress,
+				certHash
+			);
 
-        await expect(lock.withdraw()).not.to.be.reverted;
-      });
-    });
+			await expect(
+				contract
+					.connect(institution1)
+					.issueCertificate(
+						ethers.ZeroAddress,
+						certHash,
+						signature,
+						ipfsHash
+					)
+			).to.be.revertedWith("Invalid recipient");
+		});
 
-    describe("Events", function () {
-      it("Should emit an event on withdrawals", async function () {
-        const { lock, unlockTime, lockedAmount } = await loadFixture(
-          deployOneYearLockFixture
-        );
+		it("Should prevent re-issuing existing certificate", async function () {
+			const certHash = ethers.randomBytes(32);
+			const ipfsHash = "QmTestHash123";
+			const signature = await generateSignature(
+				institution1,
+				recipient1.address,
+				certHash
+			);
 
-        await time.increaseTo(unlockTime);
+			// First issuance
+			await contract
+				.connect(institution1)
+				.issueCertificate(
+					recipient1.address,
+					certHash,
+					signature,
+					ipfsHash
+				);
 
-        await expect(lock.withdraw())
-          .to.emit(lock, "Withdrawal")
-          .withArgs(lockedAmount, anyValue); // We accept any value as `when` arg
-      });
-    });
+			// Try to issue same certificate again
+			await expect(
+				contract
+					.connect(institution1)
+					.issueCertificate(
+						recipient1.address,
+						certHash,
+						signature,
+						ipfsHash
+					)
+			).to.be.revertedWith("Certificate exists");
+		});
 
-    describe("Transfers", function () {
-      it("Should transfer the funds to the owner", async function () {
-        const { lock, unlockTime, lockedAmount, owner } = await loadFixture(
-          deployOneYearLockFixture
-        );
+		it("Should prevent non-authorized institution from issuing certificate", async function () {
+			const certHash = ethers.randomBytes(32);
+			const ipfsHash = "QmTestHash123";
+			const signature = await generateSignature(
+				invalidInstitution,
+				recipient1.address,
+				certHash
+			);
 
-        await time.increaseTo(unlockTime);
+			await expect(
+				contract
+					.connect(invalidInstitution)
+					.issueCertificate(
+						recipient1.address,
+						certHash,
+						signature,
+						ipfsHash
+					)
+			).to.be.revertedWith("Not authorized institution");
+		});
+	});
 
-        await expect(lock.withdraw()).to.changeEtherBalances(
-          [owner, lock],
-          [lockedAmount, -lockedAmount]
-        );
-      });
-    });
-  });
+	describe("Certificate Verification", function () {
+		let certHash;
+		let signature;
+		const ipfsHash = "QmTestHash123";
+
+		beforeEach(async function () {
+			// Authorize institution and prepare certificate
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+
+			certHash = ethers.randomBytes(32);
+			signature = await generateSignature(
+				institution1,
+				recipient1.address,
+				certHash
+			);
+
+			// Issue certificate
+			await contract
+				.connect(institution1)
+				.issueCertificate(
+					recipient1.address,
+					certHash,
+					signature,
+					ipfsHash
+				);
+		});
+
+		it("Should verify valid certificate", async function () {
+			const [isValid, storedIpfsHash] = await contract.verifyCertificate(
+				certHash,
+				recipient1.address
+			);
+			expect(isValid).to.be.true;
+			expect(storedIpfsHash).to.equal(ipfsHash);
+		});
+
+		it("Should prevent verification of non-existent certificate", async function () {
+			const randomHash = ethers.randomBytes(32);
+			await expect(
+				contract.verifyCertificate(randomHash, recipient1.address)
+			).to.be.revertedWith("Certificate does not exist");
+		});
+
+		it("Should prevent verification of revoked certificate", async function () {
+			// Revoke certificate
+			await contract.connect(institution1).revokeCertificate(certHash);
+
+			await expect(
+				contract.verifyCertificate(certHash, recipient1.address)
+			).to.be.revertedWith("Certificate has been revoked");
+		});
+	});
+
+	describe("Certificate Revocation", function () {
+		let certHash;
+		let signature;
+		const ipfsHash = "QmTestHash123";
+
+		beforeEach(async function () {
+			// Authorize institution and prepare certificate
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+
+			certHash = ethers.randomBytes(32);
+			signature = await generateSignature(
+				institution1,
+				recipient1.address,
+				certHash
+			);
+
+			// Issue certificate
+			await contract
+				.connect(institution1)
+				.issueCertificate(
+					recipient1.address,
+					certHash,
+					signature,
+					ipfsHash
+				);
+		});
+		// this i am changing a bit
+		it("Should allow certificate issuer to revoke their own certificate", async function () {
+			await expect(
+				contract.connect(institution1).revokeCertificate(certHash)
+			)
+				.to.emit(contract, "CertificateRevoked")
+				.withArgs(certHash);
+
+			await expect(
+				contract.verifyCertificate(certHash, recipient1.address)
+			).to.be.revertedWith("Certificate has been revoked");
+		});
+
+		// it("Should allow certificate issuer to revoke their own certificate", async function () {
+		// 	await expect(
+		// 		contract.connect(institution1).revokeCertificate(certHash)
+		// 	)
+		// 		.to.emit(contract, "CertificateRevoked")
+		// 		.withArgs(certHash);
+
+		// 	const [isValid] = await contract.verifyCertificate(
+		// 		certHash,
+		// 		recipient1.address
+		// 	);
+		// 	expect(isValid).to.be.false;
+		// });
+		//
+		it("Should prevent non-issuer from revoking certificate", async function () {
+			await expect(
+				contract.connect(institution2).revokeCertificate(certHash)
+			).to.be.revertedWith("Not authorized institution");
+		});
+
+		it("Should prevent re-revoking already revoked certificate", async function () {
+			// First revocation
+			await contract.connect(institution1).revokeCertificate(certHash);
+
+			// Try to revoke again
+			await expect(
+				contract.connect(institution1).revokeCertificate(certHash)
+			).to.be.revertedWith("Already revoked");
+		});
+	});
+
+	describe("User Certificate Management", function () {
+		beforeEach(async function () {
+			// Authorize institution
+			await contract
+				.connect(owner)
+				.authorizeInstitution(institution1.address);
+		});
+
+		it("Should track user certificate count", async function () {
+			// Issue multiple certificates
+			const certHashes = [
+				ethers.randomBytes(32),
+				ethers.randomBytes(32),
+				ethers.randomBytes(32),
+			];
+			const ipfsHash = "QmTestHash123";
+
+			for (let i = 0; i < certHashes.length; i++) {
+				const signature = await generateSignature(
+					institution1,
+					recipient1.address,
+					certHashes[i]
+				);
+				await contract
+					.connect(institution1)
+					.issueCertificate(
+						recipient1.address,
+						certHashes[i],
+						signature,
+						ipfsHash
+					);
+			}
+
+			// Check certificate count
+			const count = await contract.getUserCertificateCount(
+				recipient1.address
+			);
+			expect(count).to.equal(3);
+		});
+		//change made
+		it("Should retrieve user certificates by index", async function () {
+			// Issue multiple certificates
+			const certHashes = [
+				ethers.randomBytes(32),
+				ethers.randomBytes(32),
+				ethers.randomBytes(32),
+			];
+			const ipfsHash = "QmTestHash123";
+
+			for (let i = 0; i < certHashes.length; i++) {
+				const signature = await generateSignature(
+					institution1,
+					recipient1.address,
+					certHashes[i]
+				);
+				await contract
+					.connect(institution1)
+					.issueCertificate(
+						recipient1.address,
+						certHashes[i],
+						signature,
+						ipfsHash
+					);
+			}
+
+			// Retrieve certificates
+			const retrievedHash = await contract.getUserCertificateAtIndex(
+				recipient1.address,
+				1
+			);
+
+			// Convert both values to the same format
+			const retrievedHashBytes = ethers.getBytes(retrievedHash); // Convert hex string to Uint8Array
+
+			expect(retrievedHashBytes).to.deep.equal(certHashes[1]);
+		});
+
+		// it("Should retrieve user certificates by index", async function () {
+		// 	// Issue multiple certificates
+		// 	const certHashes = [
+		// 		ethers.randomBytes(32),
+		// 		ethers.randomBytes(32),
+		// 		ethers.randomBytes(32),
+		// 	];
+		// 	const ipfsHash = "QmTestHash123";
+
+		// 	for (let i = 0; i < certHashes.length; i++) {
+		// 		const signature = await generateSignature(
+		// 			institution1,
+		// 			recipient1.address,
+		// 			certHashes[i]
+		// 		);
+		// 		await contract
+		// 			.connect(institution1)
+		// 			.issueCertificate(
+		// 				recipient1.address,
+		// 				certHashes[i],
+		// 				signature,
+		// 				ipfsHash
+		// 			);
+		// 	}
+
+		// 	// Retrieve certificates
+		// 	const retrievedHash = await contract.getUserCertificateAtIndex(
+		// 		recipient1.address,
+		// 		1
+		// 	);
+		// 	expect(retrievedHash).to.deep.equal(certHashes[1]);
+		// });
+		//change made
+		it("Should batch retrieve certificates for user", async function () {
+			// Issue multiple certificates
+			const certHashes = [
+				ethers.randomBytes(32), // Use ethers.utils for generating bytes
+				ethers.randomBytes(32),
+				ethers.randomBytes(32),
+			];
+			const ipfsHash = "QmTestHash123";
+
+			for (let i = 0; i < certHashes.length; i++) {
+				const signature = await generateSignature(
+					institution1,
+					recipient1.address,
+					certHashes[i]
+				);
+				await contract
+					.connect(institution1)
+					.issueCertificate(
+						recipient1.address,
+						certHashes[i],
+						signature,
+						ipfsHash
+					);
+			}
+
+			// Batch retrieve certificates
+			const [retrievedHashes, retrievedIpfsHashes] =
+				await contract.getCertificatesForUser(recipient1.address, 0, 2);
+
+			expect(retrievedHashes.length).to.equal(3);
+
+			// Convert retrieved hashes to Uint8Array for comparison
+			for (let i = 0; i < certHashes.length; i++) {
+				const retrievedHashBytes = ethers.getBytes(retrievedHashes[i]);
+				expect(retrievedHashBytes).to.deep.equal(certHashes[i]);
+			}
+
+			// Check if all IPFS hashes are as expected
+			expect(retrievedIpfsHashes.every((hash) => hash === ipfsHash)).to.be
+				.true;
+		});
+
+		// it("Should batch retrieve certificates for user", async function () {
+		// 	// Issue multiple certificates
+		// 	const certHashes = [
+		// 		ethers.randomBytes(32),
+		// 		ethers.randomBytes(32),
+		// 		ethers.randomBytes(32),
+		// 	];
+		// 	const ipfsHash = "QmTestHash123";
+
+		// 	for (let i = 0; i < certHashes.length; i++) {
+		// 		const signature = await generateSignature(
+		// 			institution1,
+		// 			recipient1.address,
+		// 			certHashes[i]
+		// 		);
+		// 		await contract
+		// 			.connect(institution1)
+		// 			.issueCertificate(
+		// 				recipient1.address,
+		// 				certHashes[i],
+		// 				signature,
+		// 				ipfsHash
+		// 			);
+		// 	}
+
+		// 	// Batch retrieve certificates
+		// 	const [retrievedHashes, retrievedIpfsHashes] =
+		// 		await contract.getCertificatesForUser(recipient1.address, 0, 2);
+
+		// 	expect(retrievedHashes.length).to.equal(3);
+		// 	expect(retrievedHashes[0]).to.deep.equal(certHashes[0]);
+		// 	expect(retrievedHashes[1]).to.deep.equal(certHashes[1]);
+		// 	expect(retrievedHashes[2]).to.deep.equal(certHashes[2]);
+		// 	expect(retrievedIpfsHashes.every((hash) => hash === ipfsHash)).to.be
+		// 		.true;
+		// });
+	});
 });
