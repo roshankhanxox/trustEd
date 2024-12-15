@@ -8,7 +8,7 @@ export default function InstitutionsLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-gray-100">
+    <div>
       <header className="bg-blue-600 text-white py-4 px-8">
         <h1 className="text-2xl">Institutions Dashboard</h1>
       </header>

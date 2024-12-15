@@ -19,7 +19,7 @@ export default function InstitutionDashboard() {
       <div className="flex w-full max-w-7xl space-x-8">
         
         {/* Reported Issues Section (on the left) */}
-        <div className="bg-white shadow-lg rounded-lg p-8 w-full lg:w-2/3 dark:bg-gray-800 dark:text-white">
+        <div className="bg-white shadow-lg rounded-lg p-8 w-2/3 dark:bg-gray-800 dark:text-white">
           <h2 className="text-3xl font-bold text-gray-800 dark:text-white mb-6">Reported Issues</h2>
           <div className="space-y-4">
             {issues.length === 0 ? (
@@ -28,7 +28,7 @@ export default function InstitutionDashboard() {
               issues.map((issue, index) => (
                 <div
                   key={index}
-                  className="bg-blue-50 p-4 rounded-lg shadow-md border border-blue-300 dark:bg-gray-700 dark:border-gray-600 flex justify-between items-center"
+                  className="bg-blue-50 p-4 rounded-lg shadow-md dark:bg-gray-700 dark:border-gray-600 flex justify-between items-center"
                 >
                   <p className="text-lg text-gray-700 dark:text-white font-semibold">{issue.name}</p>
                   <span className="bg-blue-600 text-white px-4 py-1 rounded-full text-sm font-medium shadow-sm">
@@ -41,8 +41,8 @@ export default function InstitutionDashboard() {
         </div>
 
         {/* Institution Dashboard Section (on the right) */}
-        <div className="bg-white shadow-lg rounded-lg p-8 flex flex-col items-center w-full lg:w-1/3 dark:bg-gray-800 dark:text-white">
-          <h1 className="text-4xl font-extrabold text-gray-800 dark:text-white mb-6">Verifier Dashboard</h1>
+        <div className="bg-white shadow-lg rounded-lg p-8 flex flex-col items-center w-1/3 dark:bg-gray-800 dark:text-white">
+          <h1 className="text-4xl font-extrabold text-gray-800 dark:text-white mb-6">Institution Dashboard</h1>
           <p className="text-gray-600 dark:text-gray-400 mb-8 text-center">
             Manage reported issues, track progress, and take immediate action.
           </p>
